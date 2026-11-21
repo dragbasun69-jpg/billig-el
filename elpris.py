@@ -42,18 +42,49 @@ def config():
 
 # ---------- Hämta och räkna ----------
 
+KALLOR = [
+    "https://www.elprisetjustnu.se/api/v1/prices",
+    "https://se.elpris.eu/api/v1/prices",  # reserv med samma format
+]
+WEBBLASARE = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/131.0 Safari/537.36 billig-el")
+
+
+def hamta_json(url):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": WEBBLASARE,
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=30) as svar:
+        return json.load(svar)
+
+
 def hamta_priser(dag, elomrade):
-    """Returnerar lista med (start, slut, öre/kWh) eller None om priserna saknas."""
-    url = (f"https://www.elprisetjustnu.se/api/v1/prices/"
-           f"{dag:%Y}/{dag:%m-%d}_{elomrade}.json")
-    try:
-        with urllib.request.urlopen(url, timeout=30) as svar:
-            data = json.load(svar)
-    except urllib.error.HTTPError as fel:
-        if fel.code == 404:
-            return None
-        raise
-    return tolka_priser(data)
+    """Returnerar lista med (start, slut, öre/kWh) eller None om priserna saknas.
+
+    Saknade priser kan ge 404 eller 403. För att skilja det från en blockering
+    kontrolleras dagens priser hos samma källa: finns de, är morgondagens bara
+    inte publicerade än. Annars provas nästa källa.
+    """
+    idag = dag - timedelta(days=1)
+    fel_lista = []
+    for bas in KALLOR:
+        url = f"{bas}/{dag:%Y}/{dag:%m-%d}_{elomrade}.json"
+        try:
+            return tolka_priser(hamta_json(url))
+        except urllib.error.HTTPError as fel:
+            fel_lista.append(f"{url}: HTTP {fel.code}")
+            if fel.code not in (403, 404):
+                continue
+        except (urllib.error.URLError, TimeoutError, ValueError) as fel:
+            fel_lista.append(f"{url}: {fel}")
+            continue
+        try:
+            hamta_json(f"{bas}/{idag:%Y}/{idag:%m-%d}_{elomrade}.json")
+            return None  # dagens finns, morgondagens inte än
+        except Exception as fel:  # noqa: BLE001
+            fel_lista.append(f"{bas} (kontroll av dagens priser): {fel}")
+    raise RuntimeError("Kunde inte hämta priser:\n" + "\n".join(fel_lista))
 
 
 def tolka_priser(data):
