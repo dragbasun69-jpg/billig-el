@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f6f7f4">
+<title>Billig el</title>
+<style>
+  :root {
+    --bg: #f6f7f4; --kort: #ffffff; --text: #1d2321; --dov: #5d6764;
+    --linje: #e2e5e0; --stapel: #c9cfca; --billig: #1f8a5b; --nu: #d9480f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .under { color: var(--dov); margin: 0 0 20px; font-size: .95rem; }
+  .kort { background: var(--kort); border: 1px solid var(--linje); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .nu-pris { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .nu-pris strong { font-size: 2.6rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .etikett { font-size: .85rem; color: var(--dov); }
+  .status { display: inline-block; margin-top: 8px; padding: 3px 10px; border-radius: 999px; font-size: .9rem; font-weight: 600; }
+  .status.billig { background: #dff3e8; color: #135c3c; }
+  .status.vanlig { background: #eef0ed; color: var(--dov); }
+  .rad { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  select, button {
+    font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--linje);
+    background: var(--kort); color: var(--text);
+  }
+  .flikar { display: flex; gap: 6px; margin-bottom: 12px; }
+  .flikar button[aria-pressed="true"] { background: var(--text); color: #fff; border-color: var(--text); }
+  svg { width: 100%; height: auto; display: block; }
+  ul.perioder { list-style: none; padding: 0; margin: 12px 0 0; }
+  ul.perioder li { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--linje); font-variant-numeric: tabular-nums; }
+  ul.perioder li:first-child { border-top: 0; }
+  .tom { color: var(--dov); }
+  .fel { color: #a61e1e; }
+  details summary { cursor: pointer; font-weight: 600; }
+  details ol { padding-left: 20px; margin: 10px 0 0; }
+  .liten { font-size: .85rem; color: var(--dov); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Billig el</h1>
+  <p class="under">Dygnets billigaste kvartar, spotpris utan moms och avgifter.</p>
+
+  <div class="rad">
+    <label class="etikett">Elområde<br>
+      <select id="omrade">
+        <option value="SE1">SE1 Luleå</option>
+        <option value="SE2">SE2 Sundsvall</option>
+        <option value="SE3">SE3 Stockholm</option>
+        <option value="SE4" selected>SE4 Malmö</option>
+      </select>
+    </label>
+    <label class="etikett">Antal billiga kvartar<br>
+      <select id="antal">
+        <option value="4">4 (1 h)</option>
+        <option value="8" selected>8 (2 h)</option>
+        <option value="12">12 (3 h)</option>
+        <option value="16">16 (4 h)</option>
+      </select>
+    </label>
+  </div>
+
+  <section class="kort" id="nu-kort">
+    <div class="etikett">Just nu</div>
+    <div class="nu-pris"><strong id="nu-pris">–</strong><span>öre/kWh</span></div>
+    <div id="nu-status"></div>
+  </section>
+
+  <section class="kort">
+    <div class="flikar">
+      <button id="flik-idag" aria-pressed="true">Idag</button>
+      <button id="flik-imorgon" aria-pressed="false">I morgon</button>
+    </div>
+    <div id="diagram"></div>
+    <div class="etikett" style="margin-top:12px">Billigaste perioderna</div>
+    <ul class="perioder" id="perioder"></ul>
+  </section>
+
+  <section class="kort">
+    <details>
+      <summary>Få notiser i mobilen</summary>
+      <ol>
+        <li>Installera appen <b>ntfy</b> från App Store eller Google Play.</li>
+        <li>Tryck på <b>+</b> och skriv in kanalnamnet ni har bestämt (det står i README).</li>
+        <li>Klart. Kl 13–14 kommer morgondagens plan och strax innan varje billig period kommer en påminnelse.</li>
+      </ol>
+      <p class="liten">På iPhone: tillåt notiser för ntfy när appen frågar.</p>
+    </details>
+  </section>
+
+  <p class="liten">Priser från <a href="https://www.elprisetjustnu.se">Elpriset just nu.se</a>.</p>
+</main>
+
+<script>
+const TZ = "Europe/Stockholm";
+const cache = {};
+let visad = "idag";
+
+function lasInstallning(nyckel, standard) {
+  try { return localStorage.getItem(nyckel) || standard; } catch (e) { return standard; }
+}
+function sparaInstallning(nyckel, varde) {
+  try { localStorage.setItem(nyckel, varde); } catch (e) {}
+}
+
+const omradeEl = document.getElementById("omrade");
+const antalEl = document.getElementById("antal");
+omradeEl.value = lasInstallning("elomrade", "SE4");
+antalEl.value = lasInstallning("antal", "8");
+
+function stockholmDatum(forskjutningDagar) {
+  const d = new Date(Date.now() + forskjutningDagar * 864e5);
+  const delar = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const v = Object.fromEntries(delar.map(p => [p.type, p.value]));
+  return { y: v.year, md: `${v.month}-${v.day}` };
+}
+
+async function hamta(dagar) {
+  const { y, md } = stockholmDatum(dagar);
+  const nyckel = `${y}/${md}_${omradeEl.value}`;
+  if (nyckel in cache) return cache[nyckel];
+  const svar = await fetch(`https://www.elprisetjustnu.se/api/v1/prices/${nyckel}.json`);
+  if (svar.status === 404) { cache[nyckel] = null; return null; }
+  if (!svar.ok) throw new Error("HTTP " + svar.status);
+  const data = (await svar.json()).map(r => ({
+    start: new Date(r.time_start), slut: new Date(r.time_end), ore: r.SEK_per_kWh * 100
+  })).sort((a, b) => a.start - b.start);
+  cache[nyckel] = data;
+  return data;
+}
+
+function billigaste(kvartar, antal) {
+  const valda = [...kvartar].sort((a, b) => a.ore - b.ore || a.start - b.start).slice(0, antal);
+  const set = new Set(valda.map(k => k.start.getTime()));
+  valda.sort((a, b) => a.start - b.start);
+  const perioder = [];
+  for (const k of valda) {
+    const sista = perioder[perioder.length - 1];
+    if (sista && sista.slut.getTime() === k.start.getTime()) { sista.slut = k.slut; sista.lista.push(k); }
+    else perioder.push({ start: k.start, slut: k.slut, lista: [k] });
+  }
+  perioder.forEach(p => p.snitt = p.lista.reduce((s, k) => s + k.ore, 0) / p.lista.length);
+  return { set, perioder };
+}
+
+const ore = v => v.toFixed(1).replace(".", ",").replace("-", "−");
+const klocka = d => d.toLocaleTimeString("sv-SE", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+const slutKlocka = p => {
+  const t = klocka(p.slut);
+  return t === "00:00" ? "24:00" : t;
+};
+
+function ritaDiagram(kvartar, set) {
+  const B = 640, H = 220, vm = 34, nm = 26, tm = 8;
+  const max = Math.max(...kvartar.map(k => k.ore), 1);
+  const min = Math.min(0, ...kvartar.map(k => k.ore));
+  const y = v => tm + (H - tm - nm) * (1 - (v - min) / (max - min));
+  const bredd = (B - vm) / kvartar.length;
+  const nu = Date.now();
+  let s = `<svg viewBox="0 0 ${B} ${H}" role="img" aria-label="Kvartspriser, billigaste kvartarna gröna och markerade med prick">`;
+  const steg = max > 200 ? 100 : max > 80 ? 50 : 20;
+  for (let v = 0; v <= max; v += steg) {
+    s += `<line x1="${vm}" x2="${B}" y1="${y(v)}" y2="${y(v)}" stroke="#e2e5e0"/>`;
+    s += `<text x="${vm - 6}" y="${y(v) + 4}" font-size="11" text-anchor="end" fill="#5d6764">${v}</text>`;
+  }
+  kvartar.forEach((k, i) => {
+    const billig = set.has(k.start.getTime());
+    const x = vm + i * bredd;
+    const topp = y(Math.max(k.ore, 0)), botten = y(Math.min(k.ore, 0));
+    s += `<rect x="${x + 0.5}" y="${topp}" width="${Math.max(bredd - 1, 1)}" height="${Math.max(botten - topp, 1)}" fill="${billig ? "var(--billig)" : "var(--stapel)"}"><title>${klocka(k.start)}: ${ore(k.ore)} öre</title></rect>`;
+    if (billig) s += `<circle cx="${x + bredd / 2}" cy="${H - nm + 8}" r="2.2" fill="var(--billig)"/>`;
+    if (k.start.getTime() <= nu && nu < k.slut.getTime())
+      s += `<line x1="${x + bredd / 2}" x2="${x + bredd / 2}" y1="${tm}" y2="${H - nm}" stroke="var(--nu)" stroke-width="2"/>`;
+    const tim = klocka(k.start);
+    if (tim.endsWith(":00") && Number(tim.slice(0, 2)) % 3 === 0)
+      s += `<text x="${x}" y="${H - 4}" font-size="11" fill="#5d6764">${tim.slice(0, 2)}</text>`;
+  });
+  s += `<text x="${vm - 6}" y="${tm + 2}" font-size="10" text-anchor="end" fill="#5d6764" dy="-0">öre</text>`;
+  return s + "</svg>";
+}
+
+async function uppdatera() {
+  const antal = Number(antalEl.value);
+  const diagram = document.getElementById("diagram");
+  const lista = document.getElementById("perioder");
+  try {
+    const idag = await hamta(0);
+    // Just nu
+    if (idag) {
+      const nu = Date.now();
+      const aktuell = idag.find(k => k.start <= nu && nu < k.slut);
+      const { set } = billigaste(idag, antal);
+      document.getElementById("nu-pris").textContent = aktuell ? ore(aktuell.ore) : "–";
+      const billig = aktuell && set.has(aktuell.start.getTime());
+      document.getElementById("nu-status").innerHTML = aktuell
+        ? `<span class="status ${billig ? "billig" : "vanlig"}">${billig ? "Billig kvart nu" : "Inte bland dygnets billigaste"}</span>`
+        : "";
+    }
+    // Saknade morgondagspriser kan ge 404 eller nätverksfel; båda betyder "inte än".
+    const kvartar = visad === "idag" ? idag : await hamta(1).catch(() => null);
+    if (!kvartar) {
+      diagram.innerHTML = `<p class="tom">Morgondagens priser publiceras cirka kl 13. Har klockan passerat det, försök igen om en stund.</p>`;
+      lista.innerHTML = "";
+      return;
+    }
+    const { set, perioder } = billigaste(kvartar, antal);
+    diagram.innerHTML = ritaDiagram(kvartar, set);
+    lista.innerHTML = perioder.map(p =>
+      `<li><span>${klocka(p.start)}–${slutKlocka(p)}</span><span>${ore(p.snitt)} öre</span></li>`).join("");
+  } catch (e) {
+    diagram.innerHTML = `<p class="fel">Kunde inte hämta priserna (${e.message}). Försök igen om en stund.</p>`;
+    lista.innerHTML = "";
+  }
+}
+
+function valjFlik(namn) {
+  visad = namn;
+  document.getElementById("flik-idag").setAttribute("aria-pressed", namn === "idag");
+  document.getElementById("flik-imorgon").setAttribute("aria-pressed", namn === "imorgon");
+  uppdatera();
+}
+document.getElementById("flik-idag").onclick = () => valjFlik("idag");
+document.getElementById("flik-imorgon").onclick = () => valjFlik("imorgon");
+omradeEl.onchange = () => { sparaInstallning("elomrade", omradeEl.value); uppdatera(); };
+antalEl.onchange = () => { sparaInstallning("antal", antalEl.value); uppdatera(); };
+
+uppdatera();
+setInterval(uppdatera, 60 * 1000);
+</script>
+</body>
+</html>
