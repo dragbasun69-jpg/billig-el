@@ -1,0 +1,44 @@
+name: Elprisnotis
+
+on:
+  schedule:
+    - cron: "10,40 11-16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: elpris
+  cancel-in-progress: false
+
+jobs:
+  notis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Hämta priser och skicka notiser
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          ELOMRADE: ${{ vars.ELOMRADE }}
+          ANTAL_KVARTAR: ${{ vars.ANTAL_KVARTAR }}
+          PAMINN_MINUTER_FORE: ${{ vars.PAMINN_MINUTER_FORE }}
+          TYST_FRAN: ${{ vars.TYST_FRAN }}
+          TYST_TILL: ${{ vars.TYST_TILL }}
+          SIDA_URL: ${{ vars.SIDA_URL }}
+        run: python elpris.py
+
+      - name: Spara att dagens notiser är skickade
+        run: |
+          if [ -n "$(git status --porcelain skickat.txt)" ]; then
+            git config user.name "elpris-bot"
+            git config user.email "elpris-bot@users.noreply.github.com"
+            git add skickat.txt
+            git commit -m "Notiser skickade för $(cat skickat.txt)"
+            git push
+          fi
